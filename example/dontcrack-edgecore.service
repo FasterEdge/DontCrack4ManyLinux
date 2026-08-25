@@ -1,0 +1,51 @@
+[Unit]
+Description=DontCrack manylinux - process manager for managed child process
+Documentation=https://github.com/FasterEdge/DontCrack4ManyLinux
+# 仅在基础系统就绪后启动
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# manylinux / 标准 Linux 通用 systemd unit
+# 1. 将 DontCrack 二进制放到 /usr/local/bin/DontCrack
+# 2. 把 target 进程也放到 /usr/local/bin/(或任意 PATH 中)
+# 3. 安装本服务：cp example/dontcrack-edgecore.service /etc/systemd/system/
+#                   systemctl daemon-reload
+#                   systemctl enable --now dontcrack-edgecore.service
+# 4. HTTP 控制接口对内监听 11883（或自行修改 ExecStart 中的 -port）
+# 5. 自动重启 (Restart=on-failure) 与 DontCrack 内部 -auto-restart 形成双重保险
+
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/var/lib/dontcrack
+
+# 说明: 把 PATH/edgecore/前置脚本 等参数按实际情况调整
+ExecStart=/usr/local/bin/DontCrack \
+  -env "PATH=/usr/local/bin:/usr/bin:/bin" \
+  -path /usr/local/bin/edgecore \
+  -pre "/usr/local/bin/edgecore-pre.sh" \
+  -start-now \
+  -auto-restart \
+  -max-retries 3 \
+  -port 11883 \
+  -file-log \
+  -log-path /var/log/dontcrack/ \
+  -log-life-day 7
+
+# 进程管理器自己挂掉时拉起
+Restart=on-failure
+RestartSec=5s
+
+# 不要无脑 fork，给单一前台进程用
+KillMode=mixed
+TimeoutStopSec=10s
+
+# hardening (按需开启)
+NoNewPrivileges=false
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
