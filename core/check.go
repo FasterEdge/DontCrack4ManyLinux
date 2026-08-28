@@ -1,6 +1,7 @@
 package core
 
 import (
+	"crypto/subtle"
 	"errors"
 	"io"
 	"net/http"
@@ -67,13 +68,23 @@ func detectFileType(path string) (string, error) {
 	}
 }
 
-// 校验请求中携带的 password，如果未配置密码则直接通过
+// 校验请求中携带的 password，如果未配置密码则直接通过。
+// 凭据来源优先级: Authorization: Bearer > X-DontCrack-Password > query 参数(兼容, 将弃用)。
+// query 传密码会进入浏览器历史与访问日志，仅作向后兼容保留。
 func checkPassword(r *http.Request, expected string) error {
 	if expected == "" {
 		return nil
 	}
-	pw := r.URL.Query().Get("password")
-	if pw == expected {
+	pw := ""
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+		pw = strings.TrimPrefix(auth, "Bearer ")
+	} else if v := r.Header.Get("X-DontCrack-Password"); v != "" {
+		pw = v
+	} else {
+		pw = r.URL.Query().Get("password")
+	}
+	// 常量时间比较，避免时序侧信道
+	if subtle.ConstantTimeCompare([]byte(pw), []byte(expected)) == 1 {
 		return nil
 	}
 	return errors.New("unauthorized")
