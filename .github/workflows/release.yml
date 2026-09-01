@@ -43,7 +43,7 @@ jobs:
     - uses: actions/upload-artifact@v4
       with:
         name: 'dontcrack-manylinux-${{ matrix.target }}'
-        path: 'dontcrack-manylinux-${{ matrix.target }}.tar.gz'
+        path: '${{ github.workspace }}/dontcrack-manylinux-${{ matrix.target }}.*'
         if-no-files-found: 'error'
         retention-days: 1
 
