@@ -1,9 +1,9 @@
 package main
 
 import (
-	"DontCrack/config"
-	"DontCrack/core"
 	"flag"
+	"github.com/FasterEdge/DontCrack4ManyLinux/config"
+	"github.com/FasterEdge/DontCrack4ManyLinux/core"
 )
 
 // FasterEdge - 对称、可靠、安全的多场景边缘计算框架
@@ -27,19 +27,19 @@ func main() {
 	maxRetries := flag.Int("max-retries", 3, "最大重试次数（可选，-1表示无限次，默认3次)")                                       // 重启最大重试次数
 	startNow := flag.Bool("start-now", false, "是否立即启动（可选，默认false）")                                           // 是否立即启动子进程
 	// 健康探针（可选，留空则不启用）
-	probeCmd := flag.String("probe-cmd", "", "子进程健康检查命令（如 \"curl -sf http://127.0.0.1:8080/health\"），留空禁用")           // 探针命令
-	probeInterval := flag.Int("probe-interval", 30, "探针间隔秒数（可选，默认30）")                                              // 探针间隔
-	probeTimeout := flag.Int("probe-timeout", 5, "探针超时秒数（可选，默认5）")                                                   // 探针超时
-	probeFailureLimit := flag.Int("probe-failure-limit", 3, "连续失败多少次判定为不健康（可选，默认3）")                              // 探针失败阈值
+	probeCmd := flag.String("probe-cmd", "", "子进程健康检查命令（如 \"curl -sf http://127.0.0.1:8080/health\"），留空禁用") // 探针命令
+	probeInterval := flag.Int("probe-interval", 30, "探针间隔秒数（可选，默认30）")                                      // 探针间隔
+	probeTimeout := flag.Int("probe-timeout", 5, "探针超时秒数（可选，默认5）")                                          // 探针超时
+	probeFailureLimit := flag.Int("probe-failure-limit", 3, "连续失败多少次判定为不健康（可选，默认3）")                        // 探针失败阈值
 	// 管理器相关
-	port := flag.Int("port", 11883, "HTTP服务端口(可选，默认11883)")                                                // 管理端口、mcp连接端口
-	listenAddress := flag.String("listen-address", "127.0.0.1", "HTTP监听地址（可选，默认127.0.0.1仅本机访问；对外监听必须配置密码）") // HTTP监听地址
-	password := flag.String("password", "", "管理进程的密码（可选，默认为空且不开启密码保护）")                                                // 管理密码
-	logCapacity := flag.Int("log-capacity", 200, "日志缓存的最大行数（可选，默认200）")                                                // 日志缓存的最大行数
-	logMaxLineBytes := flag.Int("log-max-line-bytes", 1048576, "单行日志的最大字节数（可选，用于bufio.Scanner，默认1MiB）")                    // 单行日志的最大字节数，超过这个字节数的行会被截断，默认1MiB
-	fileLogEnabled := flag.Bool("file-log", false, "是否启用文件日志（可选，默认为false）")                                                // 是否启用文件日志
-	localLogPath := flag.String("log-path", "./logs/proc_manager/", "本地日志文件目录（可选，默认 ./logs/proc_manager/进程名）")    // 本地日志文件目录，默认 ./logs/proc_manager/，实际使用时会在这个目录下创建以进程名命名的子目录来存放日志文件
-	localLogLifeDay := flag.Int("log-life-day", 7, "本地日志文件保存天数（可选，默认7天）")                                                  // 本地日志文件保存天数，默认7天，新日志来的时候会检查日志文件名，如果发现过期的日志文件就删除
+	port := flag.Int("port", 11883, "HTTP服务端口(可选，默认11883)")                                                    // 管理端口、mcp连接端口
+	listenAddress := flag.String("listen-address", "127.0.0.1", "HTTP监听地址（可选，默认127.0.0.1仅本机访问；对外监听必须配置密码）")    // HTTP监听地址
+	password := flag.String("password", "", "管理进程的密码（可选，默认为空且不开启密码保护）")                                        // 管理密码
+	logCapacity := flag.Int("log-capacity", 200, "日志缓存的最大行数（可选，默认200）")                                        // 日志缓存的最大行数
+	logMaxLineBytes := flag.Int("log-max-line-bytes", 1048576, "单行日志的最大字节数（可选，用于bufio.Scanner，默认1MiB）")        // 单行日志的最大字节数，超过这个字节数的行会被截断，默认1MiB
+	fileLogEnabled := flag.Bool("file-log", false, "是否启用文件日志（可选，默认为false）")                                    // 是否启用文件日志
+	localLogPath := flag.String("log-path", "./logs/proc_manager/", "本地日志文件目录（可选，默认 ./logs/proc_manager/进程名）") // 本地日志文件目录，默认 ./logs/proc_manager/，实际使用时会在这个目录下创建以进程名命名的子目录来存放日志文件
+	localLogLifeDay := flag.Int("log-life-day", 7, "本地日志文件保存天数（可选，默认7天）")                                      // 本地日志文件保存天数，默认7天，新日志来的时候会检查日志文件名，如果发现过期的日志文件就删除
 
 	// 解析传入的参数
 	flag.Parse()

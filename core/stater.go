@@ -7,13 +7,13 @@ package core
 // tyza66
 // https://github.com/tyza66
 import (
-	"DontCrack/config"
-	pmexec "DontCrack/exec"
-	dclog "DontCrack/log"
 	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/FasterEdge/DontCrack4ManyLinux/config"
+	pmexec "github.com/FasterEdge/DontCrack4ManyLinux/exec"
+	dclog "github.com/FasterEdge/DontCrack4ManyLinux/log"
 	"io"
 	"log"
 	"net"
