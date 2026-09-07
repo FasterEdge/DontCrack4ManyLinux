@@ -428,7 +428,10 @@ func runPreCommand(cfg config.Config) error {
 		return nil
 	}
 	log.Printf("执行启动前命令: %s", cfg.Pre)
-	cmd := osexec.Command("/bin/sh", "-c", cfg.Pre) // 标准 Linux 默认 sh
+	// 启动前钩子加超时保护: 挂死的 pre 命令会永久阻塞启动(fail-closed)。
+	preCtx, preCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer preCancel()
+	cmd := osexec.CommandContext(preCtx, "/bin/sh", "-c", cfg.Pre) // 标准 Linux 默认 sh
 	cmd.Dir = filepath.Dir(cfg.Path)
 	if env, pathVal := buildChildEnv(cfg.Env); len(env) > 0 {
 		cmd.Env = env
@@ -467,15 +470,16 @@ func createCommand(cfg config.Config) *osexec.Cmd {
 	switch procState.FileType {
 	case "shell_script":
 		cmdArgs := append([]string{cfg.Path}, args...)
-		cmd = osexec.Command("/bin/sh", cmdArgs...)
+		// 启动器进程生命周期由 monitor 显式管理, 使用永不取消的后台 ctx。
+		cmd = osexec.CommandContext(context.Background(), "/bin/sh", cmdArgs...)
 	case "script":
 		cmdArgs := append([]string{cfg.Path}, args...)
-		cmd = osexec.Command("/bin/sh", cmdArgs...)
+		cmd = osexec.CommandContext(context.Background(), "/bin/sh", cmdArgs...)
 	default:
 		if len(args) > 0 {
-			cmd = osexec.Command(cfg.Path, args...)
+			cmd = osexec.CommandContext(context.Background(), cfg.Path, args...)
 		} else {
-			cmd = osexec.Command(cfg.Path)
+			cmd = osexec.CommandContext(context.Background(), cfg.Path)
 		}
 	}
 
