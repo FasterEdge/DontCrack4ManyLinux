@@ -145,6 +145,8 @@ func (f *FileLogger) cleanupLocked(now time.Time) {
 
 // 提取文件名中的时间戳。
 // 期望格式: procName-YYYYMMDD-HHMMSS-XX.log （XX为序号，可能多位）。
+// 注意: 此前只取 "-HHMMSS" 段做 time.Parse("20060102-150405") 永远失败,
+// 导致 log-life-day 过期清理从不生效、日志无限累积(历史暗病)。
 func parseTimestampFromName(name, procName string) (time.Time, bool) {
 	base := strings.TrimSuffix(name, filepath.Ext(name))
 	// 去掉结尾的 -seq
@@ -156,21 +158,18 @@ func parseTimestampFromName(name, procName string) (time.Time, bool) {
 	if _, err := strconv.Atoi(seqPart); err != nil {
 		return time.Time{}, false
 	}
-	base = base[:lastDash]
+	base = base[:lastDash] // procName-YYYYMMDD-HHMMSS
 
-	// 再去掉时间戳
-	lastDash = strings.LastIndex(base, "-")
-	if lastDash <= 0 {
+	// 时间戳段为最后 15 字符 "YYYYMMDD-HHMMSS"(8+1+6)。
+	const tsLen = 15
+	if len(base) < tsLen {
 		return time.Time{}, false
 	}
-	tsPart := base[lastDash+1:]
-	prefix := base[:lastDash]
-	if !strings.HasPrefix(prefix, procName) {
-		// 允许 procName 内含 '-'，所以只要求前缀匹配
-		// 但仍需完整前缀等于 procName
-		if prefix != procName {
-			return time.Time{}, false
-		}
+	tsPart := base[len(base)-tsLen:]
+	// prefix 形如 "procName-"(结尾带分隔连字符), 去掉后与 procName 严格相等。
+	prefix := strings.TrimSuffix(base[:len(base)-tsLen], "-")
+	if prefix != procName {
+		return time.Time{}, false
 	}
 
 	t, err := time.Parse(timeLayout, tsPart)
