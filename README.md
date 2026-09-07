@@ -37,7 +37,12 @@
 | auto-restart       | bool   | false                    | 是否自动重启                                                        |
 | max-retries        | int    | 3                        | 最大重试次数（-1表示无限次，默认3次）                                          |
 | start-now          | bool   | false                    | 是否立即启动                                                        |
+| probe-cmd          | string | ""                       | 子进程健康检查命令（留空禁用；连续失败达阈值会 Kill 子进程）                          |
+| probe-interval     | int    | 30                       | 探针间隔（秒）                                                      |
+| probe-timeout      | int    | 5                        | 探针超时（秒）                                                      |
+| probe-failure-limit| int    | 3                        | 连续失败多少次判定为不健康（默认3）                                          |
 | password           | string | ""                       | 管理进程的密码（可选，默认为空且不开启密码保护）                                      |
+| listen-address     | string | 127.0.0.1                | HTTP 监听地址（默认仅本机；对外监听必须配置密码）                                 |
 | port               | int    | 11883                    | HTTP服务端口                                                      |
 | log-capacity       | int    | 200                      | 日志缓存的最大行数（默认200）                                              |
 | log-max-line-bytes | int    | 1048576                  | 单行日志的最大字节数（用于bufio.Scanner，默认1MiB）                            |
@@ -56,7 +61,7 @@
 > /startup
 
 - 接口说明：启动进程，同时会重置重启次数
-- 请求方式：get、post
+- 请求方式：POST
 - 请求参数
   ```
   password: 密钥（可选params参数）
@@ -70,7 +75,7 @@
 > /heartbeat
 
 - 接口说明：获得心跳信息，会输出启动情况和缓存中的日志（同时会清除缓存）
-- 请求方式：get、post
+- 请求方式：GET
 - 请求参数
   ```
   password: 密钥（可选params参数）
@@ -105,7 +110,7 @@
 > /shutdown
 
 - 接口说明：终止进程
-- 请求方式：get、post
+- 请求方式：POST
 - 请求参数
   ```
   password: 密钥（可选params参数）
@@ -121,7 +126,7 @@
 - 目标管理的进程的 Path 尽量使用全路径
 - 标准 Linux 默认 shell 为 `/bin/sh`，本版直接使用，不再像 Android 版那样探测多种路径
 - 运行的文件使用 .sh 结尾、首行包含 `#!` 都将被识别为脚本文件，由 `/bin/sh` 执行
-- 开启密码时，接口请求需要在 URL 参数中携带 `password` 参数，例如 `xxx/startup?password=123456`
+- 开启密码时，接口鉴权凭据来源优先级：`Authorization: Bearer <密码>` 请求头 > `X-DontCrack-Password` 请求头 > URL `?password=` 查询参数（兼容保留，将弃用）；例如 `xxx/startup?password=123456`
 - 与 OpenHarmony / Android 版的差异:
   - 启动横幅、根路径消息改为 `DontCrack_linux`
   - 不再探测 Android 默认 shell 路径，硬编码 `/bin/sh`
