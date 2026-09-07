@@ -3,6 +3,8 @@ package main
 
 import (
 	"flag"
+	"fmt"
+
 	"github.com/FasterEdge/DontCrack4ManyLinux/config"
 	"github.com/FasterEdge/DontCrack4ManyLinux/core"
 )
@@ -44,6 +46,20 @@ func main() {
 
 	// 解析传入的参数
 	flag.Parse()
+
+	// 防御(fail-closed): flag 解析提前终止检测。
+	// Go flag 包在遇到第一个非 flag 参数时停止解析; 若 -args 的值以 '-' 开头
+	// (如子进程参数 "-addr :9090"), 它会被 flag 包当作后续 flag 的值吞并,
+	// 使 -port/-auto-restart 等配置静默落到默认值——这是严重且隐蔽的配置错误。
+	// DontCrack 的正常使用不应出现任何位置参数, 一旦出现即为配置错误, 立即拒绝启动。
+	if leftover := flag.Args(); len(leftover) > 0 {
+		flag.Usage()
+		panic(fmt.Sprintf(
+			"参数解析提前终止: 出现未识别的位置参数 %v。"+
+				"常见原因: -args 的值以 '-' 开头被 flag 解析吞并。"+
+				"请给 -args 传值加引号(如 -args=\"--addr :8080\")或改用 -args= 形式",
+			leftover))
+	}
 
 	// 将传入的配置信息转换为全局配置结构体
 	// 安全缺省: 非环回监听时必须配置密码，否则管理接口会暴露给整个网络

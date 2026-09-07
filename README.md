@@ -45,6 +45,12 @@
 | log-path           | string | ./logs/proc_manager/    | 本地日志文件目录（默认 ./logs/proc_manager/，按进程名创建子目录）               |
 | log-life-day       | int    | 7                        | 本地日志文件保存天数（默认7天，新日志写入时会清理过期文件）                                |
 
+> **参数解析注意（重要）**: `-args` 的值若以 `-` 开头（如 `-mode normal`），Go flag 包会
+> 把它吞并为后续 flag 的值，导致 `-port` 等后续配置错位，甚至使解析提前终止——现已
+> fail-closed 拒绝启动并提示。请给 `-args` 传值加引号（`-args "-mode normal"`），或使用
+> 等号形式（`-args=-mode\ normal`，对含空格/前导 `-` 的任何值都无歧义，程序化调用推荐）。
+
+
 ### 三、接口文档
 
 > /startup

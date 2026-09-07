@@ -180,6 +180,10 @@ func (p *Process) monitor(cmd *exec.Cmd, h Hooks) {
 	// 防止旧 monitor 把更新一代进程的状态误清掉
 	if p.CurrentProcess == cmd && p.generation == myGeneration {
 		p.IsRunning = false
+		// 关键修复: 进程已退出, 必须释放 CurrentProcess。
+		// 否则下方自动重启的 stale 判定 "p.CurrentProcess != nil" 恒为真,
+		// 导致 auto-restart 的"重启计划"永远被判定为过期而跳过 —— 自动重启从不生效。
+		p.CurrentProcess = nil
 	}
 	if p.generation != myGeneration {
 		// 已被新一代取代，退出，不做任何重启决策
