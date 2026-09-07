@@ -44,6 +44,13 @@
 | password | string | "" | Password for managing the process (optional; no password protection if empty) |
 | listen-address | string | 127.0.0.1 | HTTP listen address (default loopback only; external listen requires a password) |
 | port | int | 11883 | HTTP service port |
+
+> **Probe interaction (important)**: when the probe fails consecutively up to the
+> limit, the child process is killed; whether it is restarted afterwards depends on
+> `-auto-restart` — **enable `-auto-restart` (e.g. `-max-retries -1` for unlimited)
+> whenever the probe is meant for health self-healing**, otherwise the child will not
+> recover after being killed by the probe and needs a manual `/startup`. If the probe
+> is only meant to "detect and take down", you may leave it disabled.
 | log-capacity | int | 200 | Max lines of cached logs (default 200) |
 | log-max-line-bytes | int | 1048576 | Max bytes per log line (for bufio.Scanner, default 1 MiB) |
 | file-log | bool | false | Whether to enable file logging (default false) |

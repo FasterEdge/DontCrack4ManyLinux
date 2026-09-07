@@ -44,6 +44,11 @@
 | password           | string | ""                       | 管理进程的密码（可选，默认为空且不开启密码保护）                                      |
 | listen-address     | string | 127.0.0.1                | HTTP 监听地址（默认仅本机；对外监听必须配置密码）                                 |
 | port               | int    | 11883                    | HTTP服务端口                                                      |
+
+> **探针联动注意（重要）**: 探针连续失败达阈值会主动 Kill 子进程；此后是否自动拉起
+> 取决于 `-auto-restart` —— **启用探针做健康自愈时请务必同时开启 `-auto-restart`**
+> （`-max-retries -1` 可无限重试），否则探针 Kill 后子进程不会自动恢复，需手动
+> 调 `/startup`。若只是用探针做"检测并下线"，可不开启。
 | log-capacity       | int    | 200                      | 日志缓存的最大行数（默认200）                                              |
 | log-max-line-bytes | int    | 1048576                  | 单行日志的最大字节数（用于bufio.Scanner，默认1MiB）                            |
 | file-log           | bool   | false                    | 是否启用文件日志（默认false）                                             |
