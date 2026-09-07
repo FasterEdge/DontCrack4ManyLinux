@@ -1,4 +1,4 @@
-name: '跨平台 Release 打包'
+name: '多架构 Linux Release 打包'
 on:
   workflow_dispatch:
   push:
@@ -34,11 +34,7 @@ jobs:
     - name: '打包'
       run: |
         cd dist
-        if [ "${{ matrix.goos }}" = "windows" ]; then
-          zip -qr ../dontcrack-manylinux-${{ matrix.target }}.zip dontcrack-manylinux.exe
-        else
-          tar czf ../dontcrack-manylinux-${{ matrix.target }}.tar.gz dontcrack-manylinux
-        fi
+        tar czf ../dontcrack-manylinux-${{ matrix.target }}.tar.gz dontcrack-manylinux
     - uses: actions/upload-artifact@v4
       with:
         name: 'dontcrack-manylinux-${{ matrix.target }}'
