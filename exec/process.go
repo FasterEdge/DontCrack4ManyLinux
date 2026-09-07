@@ -6,6 +6,7 @@
 package exec
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -117,14 +118,22 @@ func (p *Process) StartManagedProcess(h Hooks) error {
 	return nil
 }
 
+// ErrProcessNotRunning 表示停止时进程并未在运行(幂等语义)。
+var ErrProcessNotRunning = errors.New("进程未运行")
+
 // StopManagedProcess 尝试优雅停止进程
 // 注意：cmd.Wait() 只能被调用一次。monitor goroutine 已经持有 Wait 的唯一所有权，
 // 这里只负责发信号 + 等待 IsRunning 被 monitor 清掉，超时后 Kill。
+// 对"未运行"的进程(尚未启动, 或崩溃后正处于自动重启等待窗口)同样标记主动停止并
+// 递增代际, 使 monitor 的重启计划过期 —— 否则 /stop、/shutdown、SIGTERM 关闭都
+// 无法阻止等待窗口结束后的自动重启, 子进程会复活(甚至成为孤儿)。
 func (p *Process) StopManagedProcess(timeout time.Duration) error {
 	p.ProcessMu.Lock()
 	if !p.IsRunning || p.CurrentProcess == nil {
+		p.stoppedByReq = true
+		p.generation++
 		p.ProcessMu.Unlock()
-		return fmt.Errorf("进程未运行")
+		return ErrProcessNotRunning
 	}
 	// 标记为"主动停止"，monitor 在 OnExit 后会跳过自动重启
 	p.stoppedByReq = true

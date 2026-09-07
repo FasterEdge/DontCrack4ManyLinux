@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/FasterEdge/DontCrack4ManyLinux/config"
 	pmexec "github.com/FasterEdge/DontCrack4ManyLinux/exec"
@@ -326,7 +327,7 @@ func Start(cfg config.Config) {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if err := stopProcess(); err != nil {
+		if err := stopProcess(); err != nil && !errors.Is(err, pmexec.ErrProcessNotRunning) {
 			http.Error(w, fmt.Sprintf("停止进程失败: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -358,14 +359,12 @@ func Start(cfg config.Config) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	procState.ProcessMu.Lock()
-	running := procState.IsRunning
-	procState.ProcessMu.Unlock()
-	if running {
-		log.Println("正在停止管理的进程...")
-		if err := stopProcess(); err != nil {
-			log.Printf("停止进程时出错: %v", err)
-		}
+	// 无条件停止被监管的进程(即使此刻未在运行 —— 可能正处于自动重启等待窗口,
+	// stopProcess 会标记主动停止并递增代际, 阻止等待窗口结束后的自动重启,
+	// 避免子进程复活成为孤儿)。"进程未运行"按幂等忽略。
+	log.Println("正在停止管理的进程...")
+	if err := stopProcess(); err != nil && !errors.Is(err, pmexec.ErrProcessNotRunning) {
+		log.Printf("停止进程时出错: %v", err)
 	}
 
 	if err := server.Shutdown(ctx); err != nil {
