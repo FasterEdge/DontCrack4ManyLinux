@@ -21,11 +21,7 @@ const (
 	timeLayout      = "20060102-150405"
 )
 
-// 供内存日志缓存使用。
-type LogCache struct {
-	logsCache []string
-	logsMu    sync.Mutex
-}
+// 内存日志缓存实现在 core 包(/heartbeat 的日志输出), 本文件只负责落盘与清理。
 
 // 负责本地日志落盘与过期清理。
 type FileLogger struct {
