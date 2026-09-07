@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,30 +10,30 @@ import (
 func TestCheckPasswordAcceptsHeaderAndQuery(t *testing.T) {
 	const expected = "s3cret"
 
-	r := httptest.NewRequest(http.MethodGet, "/heartbeat", nil)
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/heartbeat", nil)
 	if err := checkPassword(r, expected); err == nil {
 		t.Fatal("missing password should fail")
 	}
 
-	r = httptest.NewRequest(http.MethodGet, "/heartbeat?password=s3cret", nil)
+	r = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/heartbeat?password=s3cret", nil)
 	if err := checkPassword(r, expected); err != nil {
 		t.Fatalf("query password should be accepted for compatibility, got: %v", err)
 	}
 
-	r = httptest.NewRequest(http.MethodGet, "/heartbeat", nil)
+	r = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/heartbeat", nil)
 	r.Header.Set("Authorization", "Bearer s3cret")
 	if err := checkPassword(r, expected); err != nil {
 		t.Fatalf("bearer header should be accepted, got: %v", err)
 	}
 
-	r = httptest.NewRequest(http.MethodGet, "/heartbeat", nil)
+	r = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/heartbeat", nil)
 	r.Header.Set("X-DontCrack-Password", "s3cret")
 	if err := checkPassword(r, expected); err != nil {
 		t.Fatalf("custom header should be accepted, got: %v", err)
 	}
 
 	// 未配置密码时全部放行
-	r = httptest.NewRequest(http.MethodGet, "/heartbeat", nil)
+	r = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/heartbeat", nil)
 	if err := checkPassword(r, ""); err != nil {
 		t.Fatalf("empty expected password should pass, got: %v", err)
 	}
@@ -51,13 +52,13 @@ func TestUnauthorizedReturns401(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/heartbeat", nil))
+	handler.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/heartbeat", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("auth failure must return 401, got %d", rec.Code)
 	}
 
 	rec = httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/heartbeat", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/heartbeat", nil)
 	req.Header.Set("Authorization", "Bearer s3cret")
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
