@@ -48,7 +48,7 @@ footer { text-align: center; color: #888; font-size: .85em; margin-top: 24px; }
 <div class="card">
   <h2>身份验证</h2>
   <div class="toolbar">
-    <input type="password" id="pwd" placeholder="password (URL 参数 ?password=... 也可)" />
+    <input type="password" id="pwd" placeholder="password" />
     <button class="btn btn-primary" onclick="loadAll()">连接</button>
     <span id="status-indicator"><span class="indicator off"></span><span id="status-text">未连接</span></span>
   </div>
@@ -86,8 +86,16 @@ footer { text-align: center; color: #888; font-size: .85em; margin-top: 24px; }
 
 <script>
 const params = new URLSearchParams(location.search);
+// 兼容旧书签/旧链接: 若 URL 中带 ?password= 则读入输入框(仅初始化, 不再经 URL 传递)。
+// 发送请求一律使用 Authorization: Bearer 头, 避免密码进入浏览器历史/访问日志。
 let pwd = params.get('password') || '';
 document.getElementById('pwd').value = pwd;
+
+function authHeaders(p) {
+  const h = new Headers();
+  if (p) h.set('Authorization', 'Bearer ' + p);
+  return h;
+}
 
 function updateIndicator(connected) {
   const ind = document.querySelector('#status-indicator .indicator');
@@ -98,9 +106,8 @@ function updateIndicator(connected) {
 
 async function loadAll() {
   pwd = document.getElementById('pwd').value || pwd;
-  const u = pwd ? `?password=${encodeURIComponent(pwd)}` : '';
   try {
-    const r = await fetch('/heartbeat' + u);
+    const r = await fetch('/heartbeat', { headers: authHeaders(pwd) });
     if (!r.ok) { updateIndicator(false); return; }
     const d = await r.json();
     updateIndicator(true);
@@ -123,8 +130,7 @@ async function loadAll() {
 async function doAction(action) {
   pwd = document.getElementById('pwd').value;
   if (!pwd) { alert('请先输入 password'); return; }
-  const u = `?password=${encodeURIComponent(pwd)}`;
-  const r = await fetch('/' + action + u, { method: 'POST' });
+  const r = await fetch('/' + action, { method: 'POST', headers: authHeaders(pwd) });
   if (r.ok) { setTimeout(loadAll, 500); }
   else { alert('操作失败: HTTP ' + r.status); }
 }
