@@ -37,8 +37,18 @@
 | auto-restart       | bool   | false                    | 是否自动重启                                                        |
 | max-retries        | int    | 3                        | 最大重试次数（-1表示无限次，默认3次）                                          |
 | start-now          | bool   | false                    | 是否立即启动                                                        |
+| probe-cmd          | string | ""                       | 子进程健康检查命令（留空禁用；连续失败达阈值会 Kill 子进程）                          |
+| probe-interval     | int    | 30                       | 探针间隔（秒）                                                      |
+| probe-timeout      | int    | 5                        | 探针超时（秒）                                                      |
+| probe-failure-limit| int    | 3                        | 连续失败多少次判定为不健康（默认3）                                          |
 | password           | string | ""                       | 管理进程的密码（可选，默认为空且不开启密码保护）                                      |
+| listen-address     | string | 127.0.0.1                | HTTP 监听地址（默认仅本机；对外监听必须配置密码）                                 |
 | port               | int    | 11883                    | HTTP服务端口                                                      |
+
+> **探针联动注意（重要）**: 探针连续失败达阈值会主动 Kill 子进程；此后是否自动拉起
+> 取决于 `-auto-restart` —— **启用探针做健康自愈时请务必同时开启 `-auto-restart`**
+> （`-max-retries -1` 可无限重试），否则探针 Kill 后子进程不会自动恢复，需手动
+> 调 `/startup`。若只是用探针做"检测并下线"，可不开启。
 | log-capacity       | int    | 200                      | 日志缓存的最大行数（默认200）                                              |
 | log-max-line-bytes | int    | 1048576                  | 单行日志的最大字节数（用于bufio.Scanner，默认1MiB）                            |
 | file-log           | bool   | false                    | 是否启用文件日志（默认false）                                             |
@@ -56,7 +66,7 @@
 > /startup
 
 - 接口说明：启动进程，同时会重置重启次数
-- 请求方式：get、post
+- 请求方式：POST
 - 请求参数
   ```
   password: 密钥（可选params参数）
@@ -70,7 +80,7 @@
 > /heartbeat
 
 - 接口说明：获得心跳信息，会输出启动情况和缓存中的日志（同时会清除缓存）
-- 请求方式：get、post
+- 请求方式：GET
 - 请求参数
   ```
   password: 密钥（可选params参数）
@@ -79,7 +89,7 @@
 - 返回示例：
      ```
 	{
-	"version": "1.0.20260901",
+	"version": "1.0.20261022",
 	"state": "stopped",
 	"info": "进程管理器正常运行",
 	"timestamp": "2026-08-25 15:28:04",
@@ -105,7 +115,7 @@
 > /shutdown
 
 - 接口说明：终止进程
-- 请求方式：get、post
+- 请求方式：POST
 - 请求参数
   ```
   password: 密钥（可选params参数）
@@ -121,7 +131,7 @@
 - 目标管理的进程的 Path 尽量使用全路径
 - 标准 Linux 默认 shell 为 `/bin/sh`，本版直接使用，不再像 Android 版那样探测多种路径
 - 运行的文件使用 .sh 结尾、首行包含 `#!` 都将被识别为脚本文件，由 `/bin/sh` 执行
-- 开启密码时，接口请求需要在 URL 参数中携带 `password` 参数，例如 `xxx/startup?password=123456`
+- 开启密码时，接口鉴权凭据来源优先级：`Authorization: Bearer <密码>` 请求头 > `X-DontCrack-Password` 请求头 > URL `?password=` 查询参数（兼容保留，将弃用）；例如 `xxx/startup?password=123456`
 - 与 OpenHarmony / Android 版的差异:
   - 启动横幅、根路径消息改为 `DontCrack_linux`
   - 不再探测 Android 默认 shell 路径，硬编码 `/bin/sh`
