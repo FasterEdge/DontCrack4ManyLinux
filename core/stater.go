@@ -55,6 +55,29 @@ var (
 	shutdownSignal = make(chan struct{})
 )
 
+// heartbeatLogBudget 是 /heartbeat 响应中日志部分的字节预算。
+// 取 900KB 而非 1MB, 为 JSON 转义放大(引号/换行)与其余字段留余量,
+// 保证序列化后总响应不超过 DontCrack-Manager 客户端的 1MB 截断上限。
+const heartbeatLogBudget = 900 * 1024
+
+// trimLogsToBudget 保留最近(尾部)的日志, 使累计字节不超预算。
+// 行序保持旧→新; 空输入返回 nil。
+func trimLogsToBudget(logs []string, budget int) []string {
+	if len(logs) == 0 || budget <= 0 {
+		return logs
+	}
+	var total int
+	for i := len(logs) - 1; i >= 0; i-- {
+		total += len(logs[i])
+		if total > budget {
+			// 当前行已使累计超预算: 保留其后的行(更短且更新);
+			// 首行即超时(i=len-1)返回空。
+			return logs[i+1:]
+		}
+	}
+	return logs
+}
+
 // 初始化并启动管理器
 func Start(cfg config.Config) {
 	// 进程退出时优雅关闭日志文件
@@ -307,6 +330,10 @@ func Start(cfg config.Config) {
 		if !exit.LastExitTime.IsZero() {
 			info.LastExitTime = exit.LastExitTime.Format("2006-01-02 15:04:05")
 		}
+		// 日志字节预算截断: 与 DontCrack-Manager 客户端 1MB 响应上限对齐,
+		// 防止 LogMaxLineBytes=1MiB 的大日志行把 /heartbeat 响应撑到 200MB,
+		// 客户端截断后 JSON 解析失败(降级为快照不更新)。
+		info.Logs = trimLogsToBudget(info.Logs, heartbeatLogBudget)
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		data, err := json.Marshal(info)
