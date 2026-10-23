@@ -6,6 +6,7 @@
 package exec
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -117,24 +118,31 @@ func (p *Process) StartManagedProcess(h Hooks) error {
 	return nil
 }
 
+// ErrProcessNotRunning 表示停止时进程并未在运行(幂等语义)。
+var ErrProcessNotRunning = errors.New("进程未运行")
+
 // StopManagedProcess 尝试优雅停止进程
 // 注意：cmd.Wait() 只能被调用一次。monitor goroutine 已经持有 Wait 的唯一所有权，
 // 这里只负责发信号 + 等待 IsRunning 被 monitor 清掉，超时后 Kill。
+// 对"未运行"的进程(尚未启动, 或崩溃后正处于自动重启等待窗口)同样标记主动停止并
+// 递增代际, 使 monitor 的重启计划过期 —— 否则 /stop、/shutdown、SIGTERM 关闭都
+// 无法阻止等待窗口结束后的自动重启, 子进程会复活(甚至成为孤儿)。
 func (p *Process) StopManagedProcess(timeout time.Duration) error {
 	p.ProcessMu.Lock()
 	if !p.IsRunning || p.CurrentProcess == nil {
+		p.stoppedByReq = true
+		p.generation++
 		p.ProcessMu.Unlock()
-		return fmt.Errorf("进程未运行")
+		return ErrProcessNotRunning
 	}
 	// 标记为"主动停止"，monitor 在 OnExit 后会跳过自动重启
 	p.stoppedByReq = true
 	cmd := p.CurrentProcess
 	p.ProcessMu.Unlock()
 
-	// 发送终止信号；失败也无碍，超时后会强制 Kill
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		// 忽略，交给下方的超时强杀
-	}
+	// 发送终止信号; 失败(进程已退出)无碍, 交由下方的超时强杀兜底。
+	// 注: 错误被显式忽略(signal 失败时进程要么已退出、要么 300ms 内的 Kill 兜底)。
+	_ = cmd.Process.Signal(syscall.SIGTERM)
 
 	// 轮询等待 monitor 把 IsRunning 置为 false（说明进程已退出并被 Wait 收走）
 	deadline := time.Now().Add(timeout)
@@ -180,6 +188,10 @@ func (p *Process) monitor(cmd *exec.Cmd, h Hooks) {
 	// 防止旧 monitor 把更新一代进程的状态误清掉
 	if p.CurrentProcess == cmd && p.generation == myGeneration {
 		p.IsRunning = false
+		// 关键修复: 进程已退出, 必须释放 CurrentProcess。
+		// 否则下方自动重启的 stale 判定 "p.CurrentProcess != nil" 恒为真,
+		// 导致 auto-restart 的"重启计划"永远被判定为过期而跳过 —— 自动重启从不生效。
+		p.CurrentProcess = nil
 	}
 	if p.generation != myGeneration {
 		// 已被新一代取代，退出，不做任何重启决策

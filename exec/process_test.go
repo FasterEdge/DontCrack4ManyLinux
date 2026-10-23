@@ -1,6 +1,7 @@
 package exec
 
 import (
+	"errors"
 	"os"
 	osexec "os/exec"
 	"sync"
@@ -105,5 +106,33 @@ func TestGenerationIncrements(t *testing.T) {
 	p.ProcessMu.Unlock()
 	if after != before+1 {
 		t.Fatalf("generation must increment by 1, got %d -> %d", before, after)
+	}
+}
+
+// 对未运行的进程(崩溃后等待自动重启窗口)执行 StopManagedProcess:
+// 必须标记 stoppedByReq 并递增 generation(使 monitor 的重启计划过期) ——
+// 否则 /stop、/shutdown、SIGTERM 关闭都无法阻止等待窗口后的自动重启(孤儿暗病)。
+func TestStopNotRunningMarksRequestAndBumpsGeneration(t *testing.T) {
+	var p Process
+	before := p.generation
+	err := p.StopManagedProcess(time.Second)
+	if !errors.Is(err, ErrProcessNotRunning) {
+		t.Fatalf("期望 ErrProcessNotRunning, 实际: %v", err)
+	}
+	p.ProcessMu.Lock()
+	defer p.ProcessMu.Unlock()
+	if !p.stoppedByReq {
+		t.Fatal("未运行进程被停止时也必须标记 stoppedByReq")
+	}
+	if p.generation != before+1 {
+		t.Fatalf("generation 必须 +1(使重启计划过期), got %d -> %d", before, p.generation)
+	}
+	// 连续再次停止: 幂等, 每次都递增(重启计划保持过期)
+	before = p.generation
+	p.ProcessMu.Unlock()
+	_ = p.StopManagedProcess(time.Second)
+	p.ProcessMu.Lock()
+	if p.generation != before+1 {
+		t.Fatalf("重复停止也必须递增 generation, got %d -> %d", before, p.generation)
 	}
 }

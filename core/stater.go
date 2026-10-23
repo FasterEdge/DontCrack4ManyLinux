@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/FasterEdge/DontCrack4ManyLinux/config"
 	pmexec "github.com/FasterEdge/DontCrack4ManyLinux/exec"
@@ -54,6 +55,29 @@ var (
 	shutdownSignal = make(chan struct{})
 )
 
+// heartbeatLogBudget 是 /heartbeat 响应中日志部分的字节预算。
+// 取 900KB 而非 1MB, 为 JSON 转义放大(引号/换行)与其余字段留余量,
+// 保证序列化后总响应不超过 DontCrack-Manager 客户端的 1MB 截断上限。
+const heartbeatLogBudget = 900 * 1024
+
+// trimLogsToBudget 保留最近(尾部)的日志, 使累计字节不超预算。
+// 行序保持旧→新; 空输入返回 nil。
+func trimLogsToBudget(logs []string, budget int) []string {
+	if len(logs) == 0 || budget <= 0 {
+		return logs
+	}
+	var total int
+	for i := len(logs) - 1; i >= 0; i-- {
+		total += len(logs[i])
+		if total > budget {
+			// 当前行已使累计超预算: 保留其后的行(更短且更新);
+			// 首行即超时(i=len-1)返回空。
+			return logs[i+1:]
+		}
+	}
+	return logs
+}
+
 // 初始化并启动管理器
 func Start(cfg config.Config) {
 	// 进程退出时优雅关闭日志文件
@@ -69,7 +93,7 @@ func Start(cfg config.Config) {
 		return
 	}
 	// 输出启动Logo和版本等欢迎信息
-	log.Printf(logo)
+	log.Print(logo) // logo 为动态横幅, 用 Print 而非 Printf 防止其中含 % 时被当作格式指令
 	log.Printf("DontCrack_linux for manylinux v%s 启动中...\n", cfg.Version)
 	log.Printf("管理进程正在管理的程序: %s\n", cfg.Path)
 
@@ -306,6 +330,10 @@ func Start(cfg config.Config) {
 		if !exit.LastExitTime.IsZero() {
 			info.LastExitTime = exit.LastExitTime.Format("2006-01-02 15:04:05")
 		}
+		// 日志字节预算截断: 与 DontCrack-Manager 客户端 1MB 响应上限对齐,
+		// 防止 LogMaxLineBytes=1MiB 的大日志行把 /heartbeat 响应撑到 200MB,
+		// 客户端截断后 JSON 解析失败(降级为快照不更新)。
+		info.Logs = trimLogsToBudget(info.Logs, heartbeatLogBudget)
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		data, err := json.Marshal(info)
@@ -326,7 +354,7 @@ func Start(cfg config.Config) {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if err := stopProcess(); err != nil {
+		if err := stopProcess(); err != nil && !errors.Is(err, pmexec.ErrProcessNotRunning) {
 			http.Error(w, fmt.Sprintf("停止进程失败: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -358,14 +386,12 @@ func Start(cfg config.Config) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	procState.ProcessMu.Lock()
-	running := procState.IsRunning
-	procState.ProcessMu.Unlock()
-	if running {
-		log.Println("正在停止管理的进程...")
-		if err := stopProcess(); err != nil {
-			log.Printf("停止进程时出错: %v", err)
-		}
+	// 无条件停止被监管的进程(即使此刻未在运行 —— 可能正处于自动重启等待窗口,
+	// stopProcess 会标记主动停止并递增代际, 阻止等待窗口结束后的自动重启,
+	// 避免子进程复活成为孤儿)。"进程未运行"按幂等忽略。
+	log.Println("正在停止管理的进程...")
+	if err := stopProcess(); err != nil && !errors.Is(err, pmexec.ErrProcessNotRunning) {
+		log.Printf("停止进程时出错: %v", err)
 	}
 
 	if err := server.Shutdown(ctx); err != nil {
@@ -428,7 +454,10 @@ func runPreCommand(cfg config.Config) error {
 		return nil
 	}
 	log.Printf("执行启动前命令: %s", cfg.Pre)
-	cmd := osexec.Command("/bin/sh", "-c", cfg.Pre) // 标准 Linux 默认 sh
+	// 启动前钩子加超时保护: 挂死的 pre 命令会永久阻塞启动(fail-closed)。
+	preCtx, preCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer preCancel()
+	cmd := osexec.CommandContext(preCtx, "/bin/sh", "-c", cfg.Pre) // 标准 Linux 默认 sh
 	cmd.Dir = filepath.Dir(cfg.Path)
 	if env, pathVal := buildChildEnv(cfg.Env); len(env) > 0 {
 		cmd.Env = env
@@ -467,15 +496,16 @@ func createCommand(cfg config.Config) *osexec.Cmd {
 	switch procState.FileType {
 	case "shell_script":
 		cmdArgs := append([]string{cfg.Path}, args...)
-		cmd = osexec.Command("/bin/sh", cmdArgs...)
+		// 启动器进程生命周期由 monitor 显式管理, 使用永不取消的后台 ctx。
+		cmd = osexec.CommandContext(context.Background(), "/bin/sh", cmdArgs...)
 	case "script":
 		cmdArgs := append([]string{cfg.Path}, args...)
-		cmd = osexec.Command("/bin/sh", cmdArgs...)
+		cmd = osexec.CommandContext(context.Background(), "/bin/sh", cmdArgs...)
 	default:
 		if len(args) > 0 {
-			cmd = osexec.Command(cfg.Path, args...)
+			cmd = osexec.CommandContext(context.Background(), cfg.Path, args...)
 		} else {
-			cmd = osexec.Command(cfg.Path)
+			cmd = osexec.CommandContext(context.Background(), cfg.Path)
 		}
 	}
 
