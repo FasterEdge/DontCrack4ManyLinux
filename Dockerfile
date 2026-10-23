@@ -5,7 +5,7 @@ FROM golang:1.25-alpine AS build
 ENV GOPROXY=https://goproxy.cn,direct
 WORKDIR /src
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/app .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app .
 
 FROM alpine:3.20
 RUN addgroup -S app && adduser -S -G app app

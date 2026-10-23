@@ -37,8 +37,20 @@
 | auto-restart | bool | false | Whether to auto-restart on crash |
 | max-retries | int | 3 | Max retry count (-1 means unlimited, default 3) |
 | start-now | bool | false | Whether to start immediately |
+| probe-cmd | string | "" | Health check command for the child process (empty disables; the child is killed after consecutive failures) |
+| probe-interval | int | 30 | Probe interval in seconds |
+| probe-timeout | int | 5 | Probe timeout in seconds |
+| probe-failure-limit | int | 3 | Consecutive failures that mark unhealthy (default 3) |
 | password | string | "" | Password for managing the process (optional; no password protection if empty) |
+| listen-address | string | 127.0.0.1 | HTTP listen address (default loopback only; external listen requires a password) |
 | port | int | 11883 | HTTP service port |
+
+> **Probe interaction (important)**: when the probe fails consecutively up to the
+> limit, the child process is killed; whether it is restarted afterwards depends on
+> `-auto-restart` — **enable `-auto-restart` (e.g. `-max-retries -1` for unlimited)
+> whenever the probe is meant for health self-healing**, otherwise the child will not
+> recover after being killed by the probe and needs a manual `/startup`. If the probe
+> is only meant to "detect and take down", you may leave it disabled.
 | log-capacity | int | 200 | Max lines of cached logs (default 200) |
 | log-max-line-bytes | int | 1048576 | Max bytes per log line (for bufio.Scanner, default 1 MiB) |
 | file-log | bool | false | Whether to enable file logging (default false) |
@@ -50,7 +62,7 @@
 > /startup
 
 - Description: Starts the process and resets the retry count
-- Method: GET, POST
+- Method: POST
 - Request parameters:
   ```
   password: secret key (optional params parameter)
@@ -64,7 +76,7 @@
 > /heartbeat
 
 - Description: Returns heartbeat information, including startup status and cached logs (logs are cleared after reading)
-- Method: GET, POST
+- Method: GET
 - Request parameters:
   ```
   password: secret key (optional params parameter)
@@ -73,7 +85,7 @@
 - Example response:
      ```
 	{
-	"version": "1.0.20260901",
+	"version": "1.0.20261022",
 	"state": "stopped",
 	"info": "Process manager running normally",
 	"timestamp": "2026-08-25 15:28:04",
@@ -99,7 +111,7 @@
 > /shutdown
 
 - Description: Terminates the process
-- Method: GET, POST
+- Method: POST
 - Request parameters:
   ```
   password: secret key (optional params parameter)
@@ -115,7 +127,7 @@
 - Use full paths for the managed process's Path whenever possible
 - The standard Linux default shell is `/bin/sh`; this version uses it directly, without probing multiple paths like the Android version
 - Files ending with `.sh` or containing `#!` on the first line are recognized as scripts and executed by `/bin/sh`
-- When password protection is enabled, API requests must include the `password` parameter in the URL, e.g. `xxx/startup?password=123456`
+- When password protection is enabled, credential sources take precedence: `Authorization: Bearer <password>` header > `X-DontCrack-Password` header > URL `?password=` query parameter (kept for backward compatibility, to be deprecated); e.g. `xxx/startup?password=123456`
 - Differences from the OpenHarmony / Android versions:
   - Startup banner and root path messages changed to `DontCrack_linux`
   - No longer probes Android default shell paths; hardcodes `/bin/sh`

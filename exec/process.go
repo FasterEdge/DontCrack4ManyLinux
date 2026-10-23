@@ -140,10 +140,9 @@ func (p *Process) StopManagedProcess(timeout time.Duration) error {
 	cmd := p.CurrentProcess
 	p.ProcessMu.Unlock()
 
-	// 发送终止信号；失败也无碍，超时后会强制 Kill
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		// 忽略，交给下方的超时强杀
-	}
+	// 发送终止信号; 失败(进程已退出)无碍, 交由下方的超时强杀兜底。
+	// 注: 错误被显式忽略(signal 失败时进程要么已退出、要么 300ms 内的 Kill 兜底)。
+	_ = cmd.Process.Signal(syscall.SIGTERM)
 
 	// 轮询等待 monitor 把 IsRunning 置为 false（说明进程已退出并被 Wait 收走）
 	deadline := time.Now().Add(timeout)
