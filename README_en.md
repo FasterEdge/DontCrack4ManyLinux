@@ -67,6 +67,120 @@
 
 ### 3. API Documentation
 
+> `/`
+
+- Description: Root path; returns a plain-text banner (`DontCrack_linux By FasterEdge`), handy as a connectivity check
+- Method: GET
+- Request parameters: none
+- Response type: text
+- Example response:
+  ```
+  DontCrack_linux By FasterEdge
+  ```
+
+> `/ui` (and `/ui/`)
+
+- Description: Embedded single-file HTML console (`core/webui/index.html`, compiled into the
+  binary via `go:embed`) offering status view, start/stop buttons and log refresh; no external
+  static files needed
+- Method: GET
+- Request parameters: none
+- Response type: HTML
+- **Authentication note (stated honestly)**: neither `/ui` nor `/ui/` checks the password, so
+  anyone can fetch this static page. The page itself contains no process data; its data
+  requests (`/heartbeat`) and actions (`/startup`, `/shutdown`) are still password-checked, so
+  with `-password` configured an unauthenticated visitor only gets an empty shell
+- Note: the page polls `/heartbeat` every 3 seconds; a `?password=` in the URL is only read
+  into the input box on load, real requests always use the `Authorization: Bearer` header, so
+  the password never lands in browser history or access logs
+
+> `/healthz`
+
+- Description: Health check (K8s `livenessProbe` / load-balancer health check). The manager's
+  own liveness is implied by its HTTP server answering at all; it returns 200 only when the
+  managed child process is running
+- Method: GET
+- Request parameters:
+  ```
+  password: secret key (optional params parameter; required when -password is configured)
+  ```
+- Response type: text
+- Example response:
+  ```
+  ok
+  ```
+  Returns `503` + `process not running` when the child is not running
+
+> `/readyz`
+
+- Description: Readiness check (K8s `readinessProbe`). **Semantically identical to `/healthz`
+  with exactly the same condition** (it likewise requires the child process to be running for
+  a 200). The two paths exist only so a K8s manifest can point `livenessProbe` and
+  `readinessProbe` at different addresses and tune each independently. The only difference is
+  the response body: `/healthz` returns `ok`, `/readyz` returns `ready`
+- Method: GET
+- Request parameters:
+  ```
+  password: secret key (optional params parameter; required when -password is configured)
+  ```
+- Response type: text
+- Example response:
+  ```
+  ready
+  ```
+  Returns `503` + `not ready` when the child is not running
+
+> `/metrics`
+
+- Description: Prometheus text-format metrics (`text/plain; version=0.0.4`); GET only, any
+  other method returns 405
+- Method: GET
+- Request parameters:
+  ```
+  password: secret key (optional params parameter; required when -password is configured)
+  ```
+- Response type: text (Prometheus exposition format)
+- Metrics:
+
+  | Metric | Type | Meaning |
+  | --- | --- | --- |
+  | `dontcrack_up` | gauge | manager is running (always 1) |
+  | `dontcrack_process_state` | gauge | child state, 1=running, 0=stopped |
+  | `dontcrack_process_pid` | gauge | child PID (0 when not running) |
+  | `dontcrack_restart_count` | counter | cumulative auto-restart count |
+  | `dontcrack_last_exit_code` | gauge | last exit code of the child |
+  | `dontcrack_last_exit_time_seconds` | gauge | unix timestamp of the last exit (0 = never exited) |
+  | `dontcrack_log_lines` | gauge | number of log lines cached in memory |
+  | `dontcrack_info` | gauge | version/platform info, labels `version`, `file_type`, `process_path` |
+
+- Example response:
+  ```
+  # HELP dontcrack_up 管理器是否在运行(始终 1)
+  # TYPE dontcrack_up gauge
+  dontcrack_up 1
+  # HELP dontcrack_process_state 子进程运行状态 1=running 0=stopped
+  # TYPE dontcrack_process_state gauge
+  dontcrack_process_state 0
+  # HELP dontcrack_process_pid 子进程 PID
+  # TYPE dontcrack_process_pid gauge
+  dontcrack_process_pid 0
+  # HELP dontcrack_restart_count 累计自动重启次数
+  # TYPE dontcrack_restart_count counter
+  dontcrack_restart_count 0
+  # HELP dontcrack_last_exit_code 子进程上次退出码
+  # TYPE dontcrack_last_exit_code gauge
+  dontcrack_last_exit_code 0
+  # HELP dontcrack_last_exit_time_seconds 子进程上次退出 unix 时间戳
+  # TYPE dontcrack_last_exit_time_seconds gauge
+  dontcrack_last_exit_time_seconds 0
+  # HELP dontcrack_log_lines 内存中缓存的日志行数
+  # TYPE dontcrack_log_lines gauge
+  dontcrack_log_lines 0
+  # HELP dontcrack_info 版本/平台信息
+  # TYPE dontcrack_info gauge
+  dontcrack_info{version="1.0.20261123",file_type="shell_script",process_path="/opt/.../childproc"} 1
+  ```
+
 > /startup
 
 - Description: Starts the process and resets the retry count
@@ -93,7 +207,7 @@
 - Example response:
      ```
 	{
-	"version": "1.0.20261116",
+	"version": "1.0.20261123",
 	"state": "stopped",
 	"info": "Process manager running normally",
 	"timestamp": "2026-08-25 15:28:04",
@@ -202,23 +316,47 @@ See the full example at `example/dontcrack-edgecore.service`; remember to adjust
 
 ### 7. Relationship with the other platform repos (stated honestly)
 
-The DontCrack family has six repositories; this one is `DontCrack4ManyLinux`. **They are
-still six independent copies of the same code**, not a shared module. This change only
-touched this repository; the other five are untouched.
+The DontCrack family has **7 repositories locally**: **5 platform repos**
+(`DontCrack4ManyLinux` — this one — plus `DontCrack4Windows`, `DontCrack4Mac`,
+`DontCrack4OpenHarmonyLinuxKernelSide`, `DontCrack4AndroidLinuxKernelSide`) and 2
+non-platform repos (`DontCrack-Manager`, `DontCrack-Desktop`). The 5 platform repos are still
+**five independent copies of the same code**, not a shared module.
 
-Measured `exec/process.go` md5 values (before this refactor), which show the copy relationship:
+**This refactor only touched this repository; it was not propagated to the other four platform
+repos**, whose code is still pre-refactor. Latest commit per repo (measured with
+`git log -1 --date=format:'%Y-%m-%d %H:%M' --format='%cd | %h | %s'`):
+
+| Repository | Latest commit | Commit subject |
+| --- | --- | --- |
+| `DontCrack4ManyLinux` (this repo) | 2026-11-22 17:35 · `823b7ec` | this refactor: build-tag platform split, restart backoff, graceful probe |
+| `DontCrack-Manager` | 2026-11-22 17:35 · `c869c7c` | probe semantics split, Windows process-tree containment, e2e in CI |
+| `DontCrack4Windows` | 2026-11-16 19:48 · `1db7a62` | chore: update dependencies for v1.0.20261116 |
+| `DontCrack4Mac` | 2026-11-16 19:48 · `20c5eb6` | chore: update dependencies for v1.0.20261116 |
+| `DontCrack4OpenHarmonyLinuxKernelSide` | 2026-11-16 19:48 · `67e3c0f` | chore: update dependencies for v1.0.20261116 |
+| `DontCrack4AndroidLinuxKernelSide` | 2026-11-16 19:47 · `157b343` | chore: update dependencies for v1.0.20261116 |
+| `DontCrack-Desktop` | 2026-11-16 22:09 · `1b8f55c` | chore(deps): update @tauri-apps/api to 2.12.5 |
+
+> So "the other repos are untouched" would be wrong — all four platform repos have their own
+> 2026-11-16 dependency-update commits; what they lack is this refactor's backoff / probe /
+> process-group convergence work.
+
+Measured `exec/process.go` md5 values (`md5sum exec/process.go`), which show the copy relationship:
 
 | Repository | `exec/process.go` md5 |
 | --- | --- |
-| `DontCrack4ManyLinux` (this repo, refactored) | `69f19f353aa5c32c5b8f80957c54afd2` (changed by this refactor) |
+| `DontCrack4ManyLinux` (this repo, refactored) | `a22250fa854f68a843fcf6ed6cf52b10` |
 | `DontCrack4AndroidLinuxKernelSide` | `3cf063ca3e4621fa06d16cefdd6bdee6` |
 | `DontCrack4OpenHarmonyLinuxKernelSide` | `3cf063ca3e4621fa06d16cefdd6bdee6` (identical to Android) |
 | `DontCrack4Windows` | `1e098e0d985db99d4ca56b44b35a5493` |
 | `DontCrack4Mac` | `aebf56a34622078fa8687b44fc18729d` |
 
+This repo's `exec/process.go` md5 was `69f19f353aa5c32c5b8f80957c54afd2` before the refactor
+and is now `a22250fa…` as listed above.
+
 Four repos share the same `exec/process_test.go` md5 (`2058cb89…`); only this repo's tests
-differ, because of this refactor. Historically the only real cross-platform branch was the
-signal difference inside `StopManagedProcess` (Unix `SIGTERM` vs Windows `os.Interrupt`).
+differ, because of this refactor (this repo: `ee93a139…`). Historically the only real
+cross-platform branch was the signal difference inside `StopManagedProcess` (Unix `SIGTERM`
+vs Windows `os.Interrupt`).
 
 **Convergence TODO (not done; each needs a separate verified change in its own repo):**
 
@@ -231,11 +369,11 @@ signal difference inside `StopManagedProcess` (Unix `SIGTERM` vs Windows `os.Int
    `CTRL_BREAK_EVENT` and replace `Process.Kill` with `taskkill /T /F`.
 4. `DontCrack4Mac`: same as Android (Unix family, covered by `platform_unix.go`).
 5. Longer term: extract `exec/` into its own Go module (e.g.
-   `github.com/FasterEdge/dontcrack-exec`) and have all six repos depend on it, removing the
-   six copies at the root. Not started; it needs a migration window agreed with each repo's
-   release pipeline and go.mod.
+   `github.com/FasterEdge/dontcrack-exec`) and have all five platform repos depend on it,
+   removing the five copies at the root. Not started; it needs a migration window agreed with
+   each repo's release pipeline and go.mod.
 
-> This change deliberately did **not** sync the other five repos "to look consistent" —
+> This change deliberately did **not** sync the other four platform repos "to look consistent" —
 > that would present unverified code as verified. The verification results below hold for
 > this repository only.
 

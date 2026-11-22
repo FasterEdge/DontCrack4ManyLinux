@@ -70,6 +70,115 @@
 
 ### 三、接口文档
 
+> `/`
+
+- 接口说明：根路径，返回纯文本横幅（`DontCrack_linux By FasterEdge`），可用于连通性探测
+- 请求方式：GET
+- 请求参数：无
+- 返回类型：文本
+- 返回示例：
+  ```
+  DontCrack_linux By FasterEdge
+  ```
+
+> `/ui`（及 `/ui/`）
+
+- 接口说明：嵌入的单文件 HTML 控制台（`core/webui/index.html`，`go:embed` 编译进二进制），
+  提供状态查看、启动/停止按钮与日志刷新，不依赖任何外部静态文件
+- 请求方式：GET
+- 请求参数：无
+- 返回类型：HTML
+- **鉴权说明（如实）**：`/ui` 与 `/ui/` 两个 handler **不做密码校验**，任何人都能取到这份
+  静态页面。页面本身不含任何进程信息；页面内的数据请求（`/heartbeat`）与操作请求
+  （`/startup`、`/shutdown`）仍然要过密码校验，因此配置了 `-password` 时，未持密码者
+  只能看到一个空壳页面
+- 说明：页面每 3 秒轮询一次 `/heartbeat`；URL 上带 `?password=` 仅在初始化时读入输入框，
+  实际请求一律走 `Authorization: Bearer` 头，密码不会进入浏览器历史与访问日志
+
+> `/healthz`
+
+- 接口说明：健康检查（K8s `livenessProbe` / 负载均衡健康检查）。管理器自身存活由其 HTTP
+  服务隐式保证（此端口能响应即管理器在运行）；只有当被托管的子进程正在运行时才返回 200
+- 请求方式：GET
+- 请求参数
+  ```
+  password: 密钥（可选params参数，配置了 -password 时为必填）
+  ```
+- 返回类型：文本
+- 返回示例：
+  ```
+  ok
+  ```
+  子进程未运行时返回 `503` + `process not running`
+
+> `/readyz`
+
+- 接口说明：就绪检查（K8s `readinessProbe`）。**与 `/healthz` 语义完全相同、判定条件完全
+  相同**（同样要求子进程正在运行才返回 200），拆成两个路径只是为了在 K8s 配置里可以把
+  `livenessProbe` 与 `readinessProbe` 指向不同地址，便于分别调整探测参数。二者唯一的区别
+  是响应文案：`/healthz` 返回 `ok`，`/readyz` 返回 `ready`
+- 请求方式：GET
+- 请求参数
+  ```
+  password: 密钥（可选params参数，配置了 -password 时为必填）
+  ```
+- 返回类型：文本
+- 返回示例：
+  ```
+  ready
+  ```
+  子进程未运行时返回 `503` + `not ready`
+
+> `/metrics`
+
+- 接口说明：Prometheus 文本格式指标（`text/plain; version=0.0.4`），仅允许 GET，其它方法返回 405
+- 请求方式：GET
+- 请求参数
+  ```
+  password: 密钥（可选params参数，配置了 -password 时为必填）
+  ```
+- 返回类型：文本（Prometheus exposition format）
+- 指标清单：
+
+  | 指标名 | 类型 | 含义 |
+  | --- | --- | --- |
+  | `dontcrack_up` | gauge | 管理器是否在运行（恒为 1） |
+  | `dontcrack_process_state` | gauge | 子进程运行状态，1=running，0=stopped |
+  | `dontcrack_process_pid` | gauge | 子进程 PID（未运行时为 0） |
+  | `dontcrack_restart_count` | counter | 累计自动重启次数 |
+  | `dontcrack_last_exit_code` | gauge | 子进程上次退出码 |
+  | `dontcrack_last_exit_time_seconds` | gauge | 子进程上次退出的 unix 时间戳（0 表示从未退出） |
+  | `dontcrack_log_lines` | gauge | 内存中缓存的日志行数 |
+  | `dontcrack_info` | gauge | 版本/平台信息，标签 `version`、`file_type`、`process_path` |
+
+- 返回示例：
+  ```
+  # HELP dontcrack_up 管理器是否在运行(始终 1)
+  # TYPE dontcrack_up gauge
+  dontcrack_up 1
+  # HELP dontcrack_process_state 子进程运行状态 1=running 0=stopped
+  # TYPE dontcrack_process_state gauge
+  dontcrack_process_state 0
+  # HELP dontcrack_process_pid 子进程 PID
+  # TYPE dontcrack_process_pid gauge
+  dontcrack_process_pid 0
+  # HELP dontcrack_restart_count 累计自动重启次数
+  # TYPE dontcrack_restart_count counter
+  dontcrack_restart_count 0
+  # HELP dontcrack_last_exit_code 子进程上次退出码
+  # TYPE dontcrack_last_exit_code gauge
+  dontcrack_last_exit_code 0
+  # HELP dontcrack_last_exit_time_seconds 子进程上次退出 unix 时间戳
+  # TYPE dontcrack_last_exit_time_seconds gauge
+  dontcrack_last_exit_time_seconds 0
+  # HELP dontcrack_log_lines 内存中缓存的日志行数
+  # TYPE dontcrack_log_lines gauge
+  dontcrack_log_lines 0
+  # HELP dontcrack_info 版本/平台信息
+  # TYPE dontcrack_info gauge
+  dontcrack_info{version="1.0.20261123",file_type="shell_script",process_path="/opt/.../childproc"} 1
+  ```
+
 > /startup
 
 - 接口说明：启动进程，同时会重置重启次数
@@ -96,7 +205,7 @@
 - 返回示例：
      ```
 	{
-	"version": "1.0.20261116",
+	"version": "1.0.20261123",
 	"state": "stopped",
 	"info": "进程管理器正常运行",
 	"timestamp": "2026-08-25 15:28:04",
@@ -199,21 +308,42 @@ sudo systemctl status dontcrack-edgecore
 
 ### 七、与其它平台仓的关系（如实说明）
 
-DontCrack 家族共有六个仓库，本仓库是 `DontCrack4ManyLinux`。**这六个仓库目前仍是同一份
-代码的六份独立拷贝**，而不是共享同一个模块；本次改动只落在本仓库内，其余五个仓库
-未做任何修改。
+DontCrack 家族在本地共有 **7 个仓库**：**5 个平台仓**（`DontCrack4ManyLinux` 本仓、
+`DontCrack4Windows`、`DontCrack4Mac`、`DontCrack4OpenHarmonyLinuxKernelSide`、
+`DontCrack4AndroidLinuxKernelSide`）+ 2 个非平台仓（`DontCrack-Manager`、`DontCrack-Desktop`）。
+5 个平台仓目前仍是同一份代码的**五份独立拷贝**，而不是共享同一个模块。
 
-各仓当前 `exec/process.go` 的 md5（实测值，用于说明拷贝关系）：
+**本次重构只落在本仓库内，没有同步到其余四个平台仓**——它们的代码仍是重构前的状态。
+各仓最新提交（`git log -1 --date=format:'%Y-%m-%d %H:%M' --format='%cd | %h | %s'` 实测）：
+
+| 仓库 | 最新提交 | 提交说明 |
+| --- | --- | --- |
+| `DontCrack4ManyLinux`（本仓） | 2026-11-22 17:35 · `823b7ec` | 本次重构：平台差异收敛到构建标签、重启退避与优雅探针 |
+| `DontCrack-Manager` | 2026-11-22 17:35 · `c869c7c` | 探针语义分离、Windows 进程树收容与 e2e 接入 CI |
+| `DontCrack4Windows` | 2026-11-16 19:48 · `1db7a62` | chore: update dependencies for v1.0.20261116 |
+| `DontCrack4Mac` | 2026-11-16 19:48 · `20c5eb6` | chore: update dependencies for v1.0.20261116 |
+| `DontCrack4OpenHarmonyLinuxKernelSide` | 2026-11-16 19:48 · `67e3c0f` | chore: update dependencies for v1.0.20261116 |
+| `DontCrack4AndroidLinuxKernelSide` | 2026-11-16 19:47 · `157b343` | chore: update dependencies for v1.0.20261116 |
+| `DontCrack-Desktop` | 2026-11-16 22:09 · `1b8f55c` | chore(deps): 更新 @tauri-apps/api 至 2.12.5 |
+
+> 因此不能说"其余仓库未做任何修改"——四个平台仓在 2026-11-16 都各自做了依赖更新提交，
+> 只是**没有**包含本次的退避/探针/进程组收敛重构。
+
+各仓当前 `exec/process.go` 的 md5（`md5sum exec/process.go` 实测值，用于说明拷贝关系）：
 
 | 仓库 | `exec/process.go` md5 |
 | --- | --- |
-| `DontCrack4ManyLinux`（本仓，已重构） | `69f19f353aa5c32c5b8f80957c54afd2` → 重构后已变化 |
+| `DontCrack4ManyLinux`（本仓，已重构） | `a22250fa854f68a843fcf6ed6cf52b10` |
 | `DontCrack4AndroidLinuxKernelSide` | `3cf063ca3e4621fa06d16cefdd6bdee6` |
 | `DontCrack4OpenHarmonyLinuxKernelSide` | `3cf063ca3e4621fa06d16cefdd6bdee6`（与 Android 完全相同） |
 | `DontCrack4Windows` | `1e098e0d985db99d4ca56b44b35a5493` |
 | `DontCrack4Mac` | `aebf56a34622078fa8687b44fc18729d` |
 
-四仓 `exec/process_test.go` md5 相同（`2058cb89…`），只有本仓的测试因本次重构而不同。
+本仓重构前 `exec/process.go` 的 md5 为 `69f19f353aa5c32c5b8f80957c54afd2`，重构后已变为上表
+的 `a22250fa…`。
+
+四仓 `exec/process_test.go` md5 相同（`2058cb89…`），只有本仓的测试因本次重构而不同
+（本仓为 `ee93a139…`）。
 真正的跨平台分支历史上只有 `StopManagedProcess` 里的信号差异（Unix `SIGTERM` /
 Windows `os.Interrupt`）。
 
@@ -227,10 +357,10 @@ Windows `os.Interrupt`）。
    `CTRL_BREAK_EVENT`，并把强杀从 `Process.Kill` 换成 `taskkill /T /F`。
 4. `DontCrack4Mac`：与 Android 相同（Unix 家族，`platform_unix.go` 可直接覆盖）。
 5. 中期目标：把 `exec/` 抽成独立 Go module（如 `github.com/FasterEdge/dontcrack-exec`），
-   六个仓以依赖方式引用，从根上消除"六份拷贝"。这一步尚未开始，需要先确认各仓
+   五个平台仓以依赖方式引用，从根上消除"五份拷贝"。这一步尚未开始，需要先确认各仓
    release 流水线与 go.mod 的改造窗口。
 
-> 本次改动**没有**为了"看起来一致"而去同步修改其它五个仓库——那会让没有验证过的代码
+> 本次改动**没有**为了"看起来一致"而去同步修改其它四个平台仓——那会让没有验证过的代码
 > 冒充已验证。本仓的验证结论（见下）只对本仓库成立。
 
 ### 八、本仓改动的验证方式
