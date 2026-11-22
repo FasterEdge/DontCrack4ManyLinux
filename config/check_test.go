@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCheckConfigRejectsInvalidNumericParams(t *testing.T) {
@@ -47,6 +48,17 @@ func TestCheckConfigRejectsInvalidNumericParams(t *testing.T) {
 		}, "probe-failure-limit"},
 		{"missing path", func(c *Config) { c.Path = "" }, "Path"},
 		{"nonexistent path", func(c *Config) { c.Path = "/definitely/not/exists/xyz" }, "不存在"},
+		{"negative restart delay", func(c *Config) { c.RestartDelay = -time.Second }, "restart-delay"},
+		{"negative restart delay max", func(c *Config) { c.RestartDelayMax = -time.Second }, "restart-delay-max"},
+		{"restart delay max below base", func(c *Config) {
+			c.RestartDelay = 2 * time.Second
+			c.RestartDelayMax = time.Second
+		}, "restart-delay-max"},
+		{"restart delay max below the default base", func(c *Config) {
+			// 未配 base(=0，按缺省 2s 生效) 却把 max 配成 1s：形同虚设，必须拒绝
+			c.RestartDelay = 0
+			c.RestartDelayMax = time.Second
+		}, "restart-delay-max"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -76,4 +88,58 @@ func TestParseConfigListenDefaults(t *testing.T) {
 	if cfg.ListenAddress != "127.0.0.1" {
 		t.Fatalf("empty listen address should default to 127.0.0.1, got %q", cfg.ListenAddress)
 	}
+}
+
+// 未显式配置退避时，必须回落到历史等价的 2s 固定基数，而不是零值。
+func TestParseConfigListenDefaultsRestartDelay(t *testing.T) {
+	cfg := ParseConfigListen("v", "/bin/true", "", "", "", false, 3, false, 11883, "", "", 200, 1048576, false, "", 7)
+	if cfg.RestartDelay != DefaultRestartDelay {
+		t.Fatalf("未配置退避基数时应为 %s, 实际 %s", DefaultRestartDelay, cfg.RestartDelay)
+	}
+	if cfg.RestartDelayMax != 0 {
+		t.Fatalf("未配置退避上限时应为 0(不封顶), 实际 %s", cfg.RestartDelayMax)
+	}
+}
+
+// 带退避的构造函数：显式值必须透传，零值/负值必须被规范化。
+func TestParseConfigListenWithProbeAndBackoff(t *testing.T) {
+	call := func(delay, max time.Duration) *Config {
+		return ParseConfigListenWithProbeAndBackoff(
+			"v", "/bin/true", "", "", "", false, 3, false,
+			11883, "", "", 200, 1048576, false, "", 7,
+			"true", 30, 5, 3, delay, max)
+	}
+
+	t.Run("explicit values pass through", func(t *testing.T) {
+		cfg := call(500*time.Millisecond, 8*time.Second)
+		if cfg.RestartDelay != 500*time.Millisecond {
+			t.Fatalf("退避基数应透传, 实际 %s", cfg.RestartDelay)
+		}
+		if cfg.RestartDelayMax != 8*time.Second {
+			t.Fatalf("退避上限应透传, 实际 %s", cfg.RestartDelayMax)
+		}
+	})
+
+	t.Run("zero base falls back to default", func(t *testing.T) {
+		cfg := call(0, 5*time.Second)
+		if cfg.RestartDelay != DefaultRestartDelay {
+			t.Fatalf("零值基数应回落到 %s, 实际 %s", DefaultRestartDelay, cfg.RestartDelay)
+		}
+	})
+
+	t.Run("negative max is clamped to zero", func(t *testing.T) {
+		cfg := call(time.Second, -1)
+		if cfg.RestartDelayMax != 0 {
+			t.Fatalf("负值上限应被规范为 0(不封顶), 实际 %s", cfg.RestartDelayMax)
+		}
+	})
+
+	t.Run("legacy constructor still defaults to 2s", func(t *testing.T) {
+		// 未改签名的旧入口必须保持历史行为，避免调用方因签名变更而行为漂移
+		cfg := ParseConfigListenWithProbe("v", "/bin/true", "", "", "", false, 3, false,
+			11883, "", "", 200, 1048576, false, "", 7, "true", 30, 5, 3)
+		if cfg.RestartDelay != DefaultRestartDelay {
+			t.Fatalf("旧构造函数退避基数应为 %s, 实际 %s", DefaultRestartDelay, cfg.RestartDelay)
+		}
+	})
 }

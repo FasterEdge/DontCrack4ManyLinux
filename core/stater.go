@@ -514,7 +514,9 @@ func createCommand(cfg config.Config) *osexec.Cmd {
 }
 
 // startHealthProbe 启动健康探针 goroutine（若配置启用）
-// 探针失败连续达到阈值会主动 Kill 子进程；monitor 接管后会按 auto-restart 配置决定是否拉起
+// 探针失败连续达到阈值后，走与 /shutdown 完全相同的停止路径：
+// 先向进程组发优雅信号，超时未退出再强杀整棵进程树（而非只 Kill 主进程）。
+// monitor 接管后会按 auto-restart 配置决定是否拉起。
 func startHealthProbe(cfg config.Config) {
 	if cfg.ProbeCmd == "" {
 		return // 探针未启用
@@ -531,6 +533,7 @@ func startHealthProbe(cfg config.Config) {
 	if limit <= 0 {
 		limit = 3
 	}
+	probe := pmexec.HealthProbe{}
 	log.Printf("健康探针已启用：%q, 间隔=%s, 超时=%s, 失败阈值=%d", cfg.ProbeCmd, interval, timeout, limit)
 
 	go func() {
@@ -545,23 +548,24 @@ func startHealthProbe(cfg config.Config) {
 			}
 			procState.ProcessMu.Lock()
 			running := procState.IsRunning && procState.CurrentProcess != nil
-			cmd := procState.CurrentProcess
 			procState.ProcessMu.Unlock()
 			if !running {
 				consecutiveFails = 0
 				continue
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			probe := osexec.CommandContext(ctx, "/bin/sh", "-c", cfg.ProbeCmd)
-			err := probe.Run()
+			probeCmd := osexec.CommandContext(ctx, "/bin/sh", "-c", cfg.ProbeCmd)
+			err := probeCmd.Run()
 			cancel()
 			if err != nil {
 				consecutiveFails++
 				log.Printf("健康探针失败 (%d/%d): %v", consecutiveFails, limit, err)
-				if consecutiveFails >= limit {
-					log.Printf("健康探针连续失败 %d 次, 主动 Kill 子进程", limit)
-					if cmd != nil && cmd.Process != nil {
-						_ = cmd.Process.Kill()
+				if probe.ShouldConverge(consecutiveFails, limit) {
+					log.Printf("健康探针连续失败 %d 次, 优雅停止并收敛进程组(超时后强杀)", limit)
+					// 复用 StopManagedProcess：优雅信号 → 超时 → 强杀进程树。
+					// 传 5s 与 /shutdown 的宽限一致。
+					if cerr := probe.Converge(&procState, 5*time.Second); cerr != nil {
+						log.Printf("探针收敛进程失败: %v", cerr)
 					}
 					consecutiveFails = 0
 				}
@@ -606,10 +610,23 @@ func startProcess(cfg config.Config) error {
 		Logf:         log.Printf,
 		AutoRestart:  cfg.AutoRestart,
 		RestartTimes: cfg.RestartTimes,
-		RestartDelay: 2 * time.Second,
+		// 退避基数来自配置；零值(未配置)回落到 config.DefaultRestartDelay，
+		// 与历史"固定 2s"行为等价。指数增长与稳定期重置由 exec 包实现，
+		// 语义与 DontCrack-Manager 的 base<<shift / stableThreshold 对齐。
+		RestartDelay:    restartDelayOrDefault(cfg.RestartDelay),
+		RestartDelayMax: cfg.RestartDelayMax,
 	}
 
 	return procState.StartManagedProcess(hooks)
+}
+
+// restartDelayOrDefault 把零值退避基数回落到 config.DefaultRestartDelay(2s)，
+// 使"未显式配置"与历史行为一致；正值原样返回。
+func restartDelayOrDefault(d time.Duration) time.Duration {
+	if d <= 0 {
+		return config.DefaultRestartDelay
+	}
+	return d
 }
 
 // stopProcess 优雅停止子进程

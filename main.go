@@ -22,13 +22,15 @@ func main() {
 
 	// 全局配置信息获得
 	// 管理子进程相关
-	path := flag.String("path", "", "要管理的程序路径（必选，支持可执行文件和shell脚本）")                                           // 程序路径
-	args := flag.String("args", "", "传递给程序的参数（可选，默认为空）")                                                      // 程序启动参数
-	pre := flag.String("pre", "", "启动前要执行的命令（可选，在sh中执行，可用&&/;/||连接多条命令，默认为空）")                                // 启动前命令
-	env := flag.String("env", "", "为子进程追加环境变量，如: \"PATH=/usr/local/bin:/usr/bin FOO=bar\"；用空格或分号分隔(可选，默认为空)") // 子进程环境变量
-	autoRestart := flag.Bool("auto-restart", false, "是否自动重启（可选，默认false）")                                     // 是否开启自动重启
-	maxRetries := flag.Int("max-retries", 3, "最大重试次数（可选，-1表示无限次，默认3次)")                                       // 重启最大重试次数
-	startNow := flag.Bool("start-now", false, "是否立即启动（可选，默认false）")                                           // 是否立即启动子进程
+	path := flag.String("path", "", "要管理的程序路径（必选，支持可执行文件和shell脚本）")                                            // 程序路径
+	args := flag.String("args", "", "传递给程序的参数（可选，默认为空）")                                                       // 程序启动参数
+	pre := flag.String("pre", "", "启动前要执行的命令（可选，在sh中执行，可用&&/;/||连接多条命令，默认为空）")                                 // 启动前命令
+	env := flag.String("env", "", "为子进程追加环境变量，如: \"PATH=/usr/local/bin:/usr/bin FOO=bar\"；用空格或分号分隔(可选，默认为空)")  // 子进程环境变量
+	autoRestart := flag.Bool("auto-restart", false, "是否自动重启（可选，默认false）")                                      // 是否开启自动重启
+	maxRetries := flag.Int("max-retries", 3, "最大重试次数（可选，-1表示无限次，默认3次)")                                        // 重启最大重试次数
+	restartDelay := flag.Duration("restart-delay", config.DefaultRestartDelay, "自动重启的退避基数（可选，默认2s；之后按指数退避增长）") // 重启退避基数
+	restartDelayMax := flag.Duration("restart-delay-max", 0, "退避等待上限（可选，默认0即不封顶；不得小于 restart-delay）")          // 退避等待上限
+	startNow := flag.Bool("start-now", false, "是否立即启动（可选，默认false）")                                            // 是否立即启动子进程
 	// 健康探针（可选，留空则不启用）
 	probeCmd := flag.String("probe-cmd", "", "子进程健康检查命令（如 \"curl -sf http://127.0.0.1:8080/health\"），留空禁用") // 探针命令
 	probeInterval := flag.Int("probe-interval", 30, "探针间隔秒数（可选，默认30）")                                      // 探针间隔
@@ -68,10 +70,10 @@ func main() {
 		panic("对外监听(" + *listenAddress + ")必须通过 -password 配置管理密码，否则请保持默认 127.0.0.1")
 	}
 
-	config := config.ParseConfigListenWithProbe(version, *path, *args, *pre, *env, *autoRestart,
+	config := config.ParseConfigListenWithProbeAndBackoff(version, *path, *args, *pre, *env, *autoRestart,
 		*maxRetries, *startNow, *port, *listenAddress, *password, *logCapacity, *logMaxLineBytes,
 		*fileLogEnabled, *localLogPath, *localLogLifeDay,
-		*probeCmd, *probeInterval, *probeTimeout, *probeFailureLimit)
+		*probeCmd, *probeInterval, *probeTimeout, *probeFailureLimit, *restartDelay, *restartDelayMax)
 
 	// 携带启动参数启动管理器
 	core.Start(*config)

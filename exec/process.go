@@ -11,7 +11,6 @@ import (
 	"io"
 	"os/exec"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -26,6 +25,7 @@ type Process struct {
 	ExitInfo       ProcessExit
 	generation     uint64 // 进程代际：每次启动递增，用于校验过期的重启计划
 	stoppedByReq   bool
+	startedAt      time.Time // 本次进程的启动时刻，用于稳定期判定
 }
 
 // 进程退出信息
@@ -35,6 +35,18 @@ type ProcessExit struct {
 	LastExitBySignal bool      // 进程是否被信号终止
 	LastExitError    string    // 进程最后退出的错误信息
 	StoppedByRequest bool      // 进程是否是被请求停止的
+}
+
+// StableThreshold 是"本次运行足够久，可以认为服务恢复正常"的时长。
+// 存活达到该时长后自动重启计数清零（对齐 DontCrack-Manager 的退避重置语义），
+// 使间歇性崩溃不会永久消耗 RestartTimes 配额，而崩溃风暴仍会被计数限制。
+const StableThreshold = 30 * time.Second
+
+// RestartPolicy 描述自动重启的退避节奏。
+// 由 monitor 从 Hooks 构造：Delay 为退避基数，MaxDelay 为退避上限（0 表示不封顶）。
+type RestartPolicy struct {
+	Delay    time.Duration // 退避基数：首次重启等待该时长，之后按指数增长
+	MaxDelay time.Duration // 退避上限（<=0 表示不封顶）
 }
 
 // Hooks 聚合了进程启动/退出时需要的回调和策略
@@ -50,8 +62,14 @@ type Hooks struct {
 	Logf         func(string, ...interface{})
 	AutoRestart  bool
 	RestartTimes int
-	RestartDelay time.Duration
+	RestartDelay time.Duration // 退避基数；<=0 时回落到 2s
+	// RestartDelayMax 是退避上限；<=0 表示不封顶。
+	// 必须显式透传：否则配置了 -restart-delay-max 也不生效（退避会无限增长）。
+	RestartDelayMax time.Duration
 }
+
+// ErrProcessNotRunning 表示停止时进程并未在运行(幂等语义)。
+var ErrProcessNotRunning = errors.New("进程未运行")
 
 // StartManagedProcess 启动子进程并在内部启动等待/回调逻辑
 func (p *Process) StartManagedProcess(h Hooks) error {
@@ -86,6 +104,11 @@ func (p *Process) StartManagedProcess(h Hooks) error {
 		}
 	}
 
+	// 进程组收敛：必须在 cmd.Start() 之前设置（Unix 的 setpgid、Windows 的
+	// CREATE_NEW_PROCESS_GROUP 都是"创建时"生效），否则停止时只能杀掉主进程，
+	// 由子进程派生的后代将变成孤儿。具体做法由 platform_*.go 提供。
+	applyLaunchGroup(cmd)
+
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("创建stdout管道失败: %v", err)
@@ -102,6 +125,7 @@ func (p *Process) StartManagedProcess(h Hooks) error {
 	p.CurrentProcess = cmd
 	p.IsRunning = true
 	p.Pid = cmd.Process.Pid
+	p.startedAt = time.Now()
 	p.generation++
 	if h.OnStarted != nil {
 		h.OnStarted(cmd)
@@ -118,12 +142,9 @@ func (p *Process) StartManagedProcess(h Hooks) error {
 	return nil
 }
 
-// ErrProcessNotRunning 表示停止时进程并未在运行(幂等语义)。
-var ErrProcessNotRunning = errors.New("进程未运行")
-
 // StopManagedProcess 尝试优雅停止进程
 // 注意：cmd.Wait() 只能被调用一次。monitor goroutine 已经持有 Wait 的唯一所有权，
-// 这里只负责发信号 + 等待 IsRunning 被 monitor 清掉，超时后 Kill。
+// 这里只负责发信号 + 等待 IsRunning 被 monitor 清掉，超时后强杀。
 // 对"未运行"的进程(尚未启动, 或崩溃后正处于自动重启等待窗口)同样标记主动停止并
 // 递增代际, 使 monitor 的重启计划过期 —— 否则 /stop、/shutdown、SIGTERM 关闭都
 // 无法阻止等待窗口结束后的自动重启, 子进程会复活(甚至成为孤儿)。
@@ -140,9 +161,10 @@ func (p *Process) StopManagedProcess(timeout time.Duration) error {
 	cmd := p.CurrentProcess
 	p.ProcessMu.Unlock()
 
-	// 发送终止信号; 失败(进程已退出)无碍, 交由下方的超时强杀兜底。
-	// 注: 错误被显式忽略(signal 失败时进程要么已退出、要么 300ms 内的 Kill 兜底)。
-	_ = cmd.Process.Signal(syscall.SIGTERM)
+	// 优雅阶段：向整个进程组发"请退出"信号，而不是只对主进程发。
+	// 失败(进程已退出/无进程组)无碍, 交由下方的超时强杀兜底。
+	// 注: 错误被显式忽略(优雅信号失败时进程要么已退出、要么超时后的强杀兜底)。
+	_ = terminateGroup(cmd.Process, false)
 
 	// 轮询等待 monitor 把 IsRunning 置为 false（说明进程已退出并被 Wait 收走）
 	deadline := time.Now().Add(timeout)
@@ -156,8 +178,8 @@ func (p *Process) StopManagedProcess(timeout time.Duration) error {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// 超时仍未退出 → 强制 Kill
-	if err := cmd.Process.Kill(); err != nil {
+	// 超时仍未退出 → 强制收敛整棵进程树后强杀主进程
+	if err := terminateGroup(cmd.Process, true); err != nil {
 		return fmt.Errorf("强制终止进程失败: %v", err)
 	}
 	// Kill 后再等 monitor 收走
@@ -179,6 +201,7 @@ func (p *Process) monitor(cmd *exec.Cmd, h Hooks) {
 	// 快照自身代际：若等待期间发生了新的启动/停止(代际变化)，则本 monitor 已过期
 	p.ProcessMu.Lock()
 	myGeneration := p.generation
+	myStartedAt := p.startedAt
 	p.ProcessMu.Unlock()
 
 	err := cmd.Wait()
@@ -211,13 +234,20 @@ func (p *Process) monitor(cmd *exec.Cmd, h Hooks) {
 		if ee, ok := err.(*exec.ExitError); ok {
 			ps := ee.ProcessState
 			exitInfo.LastExitCode = ps.ExitCode()
-			if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+			if ws, ok := ps.Sys().(waitStatus); ok && ws.Signaled() {
 				exitInfo.LastExitBySignal = true
 			}
 		}
 	}
 	exitInfo.StoppedByRequest = p.stoppedByReq
 	p.ExitInfo = exitInfo
+	// 稳定期重置：本次存活超过阈值说明不是崩溃风暴，
+	// 清零重启计数，避免间歇性崩溃逐步耗尽 RestartTimes 配额后永久放弃自愈。
+	// 对齐 DontCrack-Manager 的 stableThreshold 语义。
+	stableReset := myStartedAt.After(time.Time{}) && time.Since(myStartedAt) >= StableThreshold
+	if stableReset {
+		p.RestartCount = 0
+	}
 	p.ProcessMu.Unlock()
 
 	if h.OnExit != nil {
@@ -227,7 +257,6 @@ func (p *Process) monitor(cmd *exec.Cmd, h Hooks) {
 	// 手动停止(HTTP /shutdown 或管理器关机触发的停止)后不再自动重启。
 	// 否则 auto-restart 开启时 /shutdown 杀掉当前进程后 monitor 又把它拉起来，
 	// 造成"关都关不掉"的暗病。
-	// 手动停止(HTTP /shutdown 或管理器关机触发的停止)后不再自动重启。
 	// 这里锁已在上方释放，无需再 Unlock（历史 bug：此处曾重复解锁导致 panic）
 	if exitInfo.StoppedByRequest {
 		return
@@ -240,6 +269,8 @@ func (p *Process) monitor(cmd *exec.Cmd, h Hooks) {
 		p.RestartCount++
 	}
 	restartCount := p.RestartCount
+	// MaxDelay 由上层经 Hooks 透传；0 表示不封顶。
+	policy := RestartPolicy{Delay: h.RestartDelay, MaxDelay: h.RestartDelayMax}
 	p.ProcessMu.Unlock()
 
 	if !shouldRestart {
@@ -249,12 +280,9 @@ func (p *Process) monitor(cmd *exec.Cmd, h Hooks) {
 		return
 	}
 
-	delay := h.RestartDelay
-	if delay == 0 {
-		delay = 2 * time.Second
-	}
+	delay := policy.BackoffDelay(restartCount)
 	if h.Logf != nil {
-		h.Logf("准备重启进程，当前重试次数: %d/%d", restartCount, h.RestartTimes)
+		h.Logf("准备重启进程，当前重试次数: %d/%d, 退避等待: %s", restartCount, h.RestartTimes, delay)
 	}
 	time.Sleep(delay)
 
@@ -272,4 +300,35 @@ func (p *Process) monitor(cmd *exec.Cmd, h Hooks) {
 	if err := p.StartManagedProcess(h); err != nil && h.Logf != nil {
 		h.Logf("自动重启失败: %v", err)
 	}
+}
+
+// BackoffDelay 返回第 restartCount 次重启前的等待时长。
+// 语义与 DontCrack-Manager 的 nextBackoff 对齐：min(base×2^(n-1), backoff_max)，
+// 首次重试用 base；n<=0 时退化为 base。MaxDelay<=0 表示不封顶。
+func (r RestartPolicy) BackoffDelay(restartCount int) time.Duration {
+	base := r.Delay
+	if base <= 0 {
+		base = 2 * time.Second // 历史默认：固定 2s
+	}
+	n := restartCount
+	if n < 1 {
+		return base
+	}
+	shift := n - 1
+	const maxShift = 20 // 与 Manager 一致：限制左移位宽避免溢出
+	if shift > maxShift {
+		shift = maxShift
+	}
+	d := base << shift
+	// 溢出/越界保护：位移后变小或负值都视为溢出，直接封顶
+	if d <= 0 || d < base {
+		if r.MaxDelay > 0 {
+			return r.MaxDelay
+		}
+		return base
+	}
+	if r.MaxDelay > 0 && d > r.MaxDelay {
+		return r.MaxDelay
+	}
+	return d
 }

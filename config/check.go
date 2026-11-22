@@ -46,6 +46,23 @@ func CheckConfig(config Config) error {
 	if config.LocalLogLifeDay < 0 {
 		return fmt.Errorf("log-life-day 不能为负数, 当前值: %d", config.LocalLogLifeDay)
 	}
+	// 重启退避：RestartDelay 为零值表示"未配置"，按缺省 2s 处理(与历史固定 2s 等价)，
+	// 因此这里只拒绝负值这种明确非法的输入；
+	// RestartDelayMax 若设置则不得小于**生效的**基数，否则指数退避形同虚设。
+	if config.RestartDelay < 0 {
+		return fmt.Errorf("restart-delay 不能为负数, 当前值: %s", config.RestartDelay)
+	}
+	if config.RestartDelayMax < 0 {
+		return fmt.Errorf("restart-delay-max 不能为负数, 当前值: %s", config.RestartDelayMax)
+	}
+	effectiveDelay := config.RestartDelay
+	if effectiveDelay == 0 {
+		effectiveDelay = DefaultRestartDelay
+	}
+	if config.RestartDelayMax > 0 && config.RestartDelayMax < effectiveDelay {
+		return fmt.Errorf("restart-delay-max 不能小于 restart-delay, 当前值: %s < %s",
+			config.RestartDelayMax, effectiveDelay)
+	}
 	// 探针启用时参数必须合法
 	if config.ProbeCmd != "" {
 		if config.ProbeInterval <= 0 {
