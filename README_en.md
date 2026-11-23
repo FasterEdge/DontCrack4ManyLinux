@@ -84,12 +84,14 @@
   binary via `go:embed`) offering status view, start/stop buttons and log refresh; no external
   static files needed
 - Method: GET
-- Request parameters: none
+- Request parameters: none (credentials go in the header — `Authorization: Bearer <password>`, or the
+  compatible `X-DontCrack-Password`; for a first browser visit `?password=` seeds the input box)
 - Response type: HTML
-- **Authentication note (stated honestly)**: neither `/ui` nor `/ui/` checks the password, so
-  anyone can fetch this static page. The page itself contains no process data; its data
-  requests (`/heartbeat`) and actions (`/startup`, `/shutdown`) are still password-checked, so
-  with `-password` configured an unauthenticated visitor only gets an empty shell
+- **Authentication note (stated honestly)**: `/ui` and `/ui/` share one handler and are
+  password-checked like every other endpoint. With `-password` configured, a request without it
+  gets `401` (body is just `unauthorized`, no page content); only a correct password returns the
+  HTML. Without `-password` configured the endpoints stay open, so a password-less deployment is
+  never locked out by its own check
 - Note: the page polls `/heartbeat` every 3 seconds; a `?password=` in the URL is only read
   into the input box on load, real requests always use the `Authorization: Bearer` header, so
   the password never lands in browser history or access logs

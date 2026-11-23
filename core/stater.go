@@ -141,15 +141,22 @@ func Start(cfg config.Config) {
 
 	// 创建HTTP服务器
 	mux := http.NewServeMux()
-	// Web UI: 嵌入的单文件 HTML, /ui 与 /ui/ 都直接返回页面
-	mux.HandleFunc("/ui", func(w http.ResponseWriter, r *http.Request) {
+	// Web UI: 嵌入的单文件 HTML, /ui 与 /ui/ 都返回页面。
+	// 页面本身不含任何进程信息, 但它能列出全部可用操作入口; 因此与其他
+	// 接口一致地过密码校验, 不留下"唯一一个无鉴权端点"。
+	// 浏览器首次访问需带 ?password=(页面会把读到的值填进输入框, 之后
+	// 的数据/操作请求一律走 Authorization: Bearer, 密码不再进 URL)。
+	uiHandler := func(w http.ResponseWriter, r *http.Request) {
+		if err := checkPassword(r, cfg.Password); err != nil {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(webuiHTML)
-	})
-	mux.HandleFunc("/ui/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(webuiHTML)
-	})
+	}
+	mux.HandleFunc("/ui", uiHandler)
+	mux.HandleFunc("/ui/", uiHandler)
 	// 根路径返回简单文本
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")

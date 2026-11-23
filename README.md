@@ -86,12 +86,12 @@
 - 接口说明：嵌入的单文件 HTML 控制台（`core/webui/index.html`，`go:embed` 编译进二进制），
   提供状态查看、启动/停止按钮与日志刷新，不依赖任何外部静态文件
 - 请求方式：GET
-- 请求参数：无
+- 请求参数：无（鉴权凭据走请求头：`Authorization: Bearer <password>`，或兼容的
+  `X-DontCrack-Password`；首次用浏览器直接打开时可用 `?password=` 引导页面填入输入框）
 - 返回类型：HTML
-- **鉴权说明（如实）**：`/ui` 与 `/ui/` 两个 handler **不做密码校验**，任何人都能取到这份
-  静态页面。页面本身不含任何进程信息；页面内的数据请求（`/heartbeat`）与操作请求
-  （`/startup`、`/shutdown`）仍然要过密码校验，因此配置了 `-password` 时，未持密码者
-  只能看到一个空壳页面
+- **鉴权说明（如实）**：`/ui` 与 `/ui/` 共用同一个 handler，与其他接口一样过密码校验。
+  配置了 `-password` 时，未持密码者得到 `401`（响应体只有 `unauthorized`，不含页面内容），
+  持密码者才拿到 HTML；未配置 `-password` 时原样放行，不会把无密码部署锁在外面
 - 说明：页面每 3 秒轮询一次 `/heartbeat`；URL 上带 `?password=` 仅在初始化时读入输入框，
   实际请求一律走 `Authorization: Bearer` 头，密码不会进入浏览器历史与访问日志
 
